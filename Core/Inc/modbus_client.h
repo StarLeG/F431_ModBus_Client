@@ -1,0 +1,6 @@
+#ifndef MODBUS_CLIENT_H
+#define MODBUS_CLIENT_H
+
+
+
+#endif // MODBUS_CLIENT_H
