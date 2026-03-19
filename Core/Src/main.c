@@ -28,7 +28,10 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+// Буферы для хранения полученных данных
+#define MAX_HOLDING_REGISTERS    100
+#define MAX_INPUT_REGISTERS      100
+#define MAX_COILS                200
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -44,13 +47,130 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+ModbusClient modbus_client;
 
+// Структуры для хранения данных
+typedef struct {
+    uint16_t address;
+    uint16_t values[MAX_HOLDING_REGISTERS];
+    uint16_t count;
+    uint32_t timestamp;
+} HoldingRegisters_t;
+
+typedef struct {
+    uint16_t address;
+    uint16_t values[MAX_INPUT_REGISTERS];
+    uint16_t count;
+    uint32_t timestamp;
+} InputRegisters_t;
+
+typedef struct {
+    uint16_t address;
+    uint8_t coils[MAX_COILS / 8];
+    uint16_t count;
+    uint32_t timestamp;
+} Coils_t;
+
+// Глобальные переменные для хранения данных
+static HoldingRegisters_t holding_regs = {0};
+static InputRegisters_t input_regs = {0};
+static Coils_t coils = {0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+void ModbusCallback(uint8_t slave_addr, uint8_t function, uint8_t *data, uint16_t len, bool success)
+{
+  if (!success)
+  {
+    // Обработка ошибки
+    if(len > 0)
+    {
+      uint8_t exception_code = data[0]; // Код исключения находится в первом байте данных
 
+      switch (exception_code) {
+        case MODBUS_EXCEPTION_ILLEGAL_FUNCTION:
+          // Неверный код функции
+          break;
+        case MODBUS_EXCEPTION_ILLEGAL_DATA_ADDR:
+          // Неверный адрес данных
+          break;
+        case MODBUS_EXCEPTION_ILLEGAL_DATA_VALUE:
+          // Неверное значение данных
+          break;
+        case MODBUS_EXCEPTION_SLAVE_DEVICE_FAILURE:
+          // Ошибка устройства-слейва
+          break;
+        case MODBUS_EXCEPTION_ACKNOWLEDGE:
+          // Подтверждение
+          break;
+        case MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY:
+          // Устройство-слейв занято
+          break;
+        case MODBUS_EXCEPTION_MEMORY_PARITY_ERROR:
+          // Ошибка четности памяти
+          break;
+        case MODBUS_EXCEPTION_GATEWAY_PATH_UNAVAIL:
+          // Путь шлюза недоступен
+          break;
+        case MODBUS_EXCEPTION_GATEWAY_TARGET_FAILED:
+          // Цель шлюза не отвечает
+          break;
+        default:
+          // Неизвестная ошибка
+          break;
+      
+      }
+    }
+    
+  }
+  else
+  {
+    // Обработка успешного ответа   
+
+    switch (function) {
+      case MODBUS_FUNC_READ_COILS:
+        // Обработка данных катушек
+        break;
+      case MODBUS_FUNC_READ_DISCRETE_INPUTS:
+        // Обработка данных дискретных входов
+        break;
+      case MODBUS_FUNC_READ_HOLDING_REGISTERS:
+        // Обработка данных holding регистров
+        uint8_t byte_count = data[0]; // Количество байт данных
+        uint16_t reg_count = byte_count / 2; // Количество регистров (для функций чтения регистров)
+
+        // Сохраняем в глобальную структуру
+        holding_regs.address = slave_addr; // Адрес устройства-слейва
+        holding_regs.count = reg_count; // Количество регистров
+        holding_regs.timestamp = HAL_GetTick(); // Время получения данных
+
+        for (uint16_t i = 0; i < reg_count; i++) {
+            holding_regs.values[i] = (data[1 + i*2] << 8) | data[2 + i*2]; // Сохранение регистра
+        }
+        break;
+      case MODBUS_FUNC_READ_INPUT_REGISTERS:
+        // Обработка данных input регистров
+        break;
+      case MODBUS_FUNC_WRITE_SINGLE_COIL:
+        // Подтверждение записи катушки
+        break;
+      case MODBUS_FUNC_WRITE_SINGLE_REGISTER:
+        // Подтверждение записи регистра
+        break;
+      case MODBUS_FUNC_WRITE_MULTIPLE_COILS:
+        // Подтверждение записи нескольких катушек
+        break;
+      case MODBUS_FUNC_WRITE_MULTIPLE_REGISTERS:
+        // Подтверждение записи нескольких регистров
+        break;
+      default:
+        // Неизвестная функция
+        break;
+    }
+  }
+}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -89,7 +209,17 @@ int main(void)
   MX_GPIO_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  // Инициализация Modbus клиента  
+  MODBUS_Init(&modbus_client, &huart1, 0x01);
+  MODBUS_SetTimeout(&modbus_client, 1000);
+  MODBUS_SetRetries(&modbus_client, 3); 
+  MODBUS_SetCallback(&modbus_client, ModbusCallback);
 
+  // Проверка, не устарели ли данные (например, старше 10 секунд)
+  bool MODBUS_IsDataFresh(uint32_t timestamp, uint32_t max_age_ms)
+  {
+    return (HAL_GetTick() - timestamp) < max_age_ms;
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -99,6 +229,24 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    MODBUS_Process(&modbus_client);
+    static uint32_t last_read = 0; // Время последнего чтения
+    // Каждые 2 секунды читаем данные
+    if ((HAL_GetTick() - last_read) > 2000)
+    {
+      MODBUS_ReadHoldingRegisters(&modbus_client, 0x01, 0x0001, 1);
+      last_read = HAL_GetTick();
+    }
+
+    // Проверка свежести данных
+    if (MODBUS_IsDataFresh(holding_regs.timestamp, 10000)) {
+        // Данные свежие, можно использовать
+        int value = holding_regs.values[0]; // Получаем значение первого регистра
+        
+    } else {
+        // Данные устарели, нужно обновить
+        MODBUS_ReadHoldingRegisters(&modbus_client, 0x01, 0x0000, 1);
+    }
   }
   /* USER CODE END 3 */
 }
@@ -150,7 +298,27 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+// Обработчики прерываний UART
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1) {
+        MODBUS_UART_RxCpltCallback(&modbus_client);
+    }
+}
 
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1) {
+        MODBUS_UART_TxCpltCallback(&modbus_client);
+    }
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1) {
+        MODBUS_UART_ErrorCallback(&modbus_client);
+    }
+}
 /* USER CODE END 4 */
 
 /**
